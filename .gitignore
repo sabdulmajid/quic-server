@@ -1,0 +1,32 @@
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+build/
+out/
+bin/
+obj/
+
+# IDE files
+.vs/
+.vscode/
+*.swp
+*.swo
+
+# Dependencies
+msquic/
+
+# CMake files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# OS specific
+.DS_Store
+Thumbs.db 
