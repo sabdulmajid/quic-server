@@ -105,7 +105,8 @@ private:
     }
 
     QUIC_STATUS HandleNewConnection(HQUIC Listener, HQUIC Connection) {
-        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Connection, (QUIC_CONNECTION_CALLBACK_HANDLER)ClientCallback, this))) {
+        // error here -- invalid type conversionC/C++(171)
+        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Connection, ClientCallback, this))) {
             return QUIC_STATUS_INTERNAL_ERROR;
         }
         return QUIC_STATUS_SUCCESS;
@@ -155,7 +156,7 @@ private:
     QUIC_STATUS HandleClientStream(HQUIC Connection, HQUIC Stream) {
         // Set the stream callback handler
         QUIC_STREAM_CALLBACK_HANDLER handler = StreamCallback;
-        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Stream, handler, this))) {
+        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Stream, QUIC_STREAM_START_FLAG_NONE))) {
             std::cerr << "Failed to set stream callback" << std::endl;
             return QUIC_STATUS_INTERNAL_ERROR;
         }
@@ -178,7 +179,7 @@ private:
     QUIC_STATUS HandleServerStream(HQUIC Connection, HQUIC Stream) {
         // Set the stream callback handler
         QUIC_STREAM_CALLBACK_HANDLER handler = StreamCallback;
-        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Stream, handler, this))) {
+        if (QUIC_FAILED(MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
             return QUIC_STATUS_INTERNAL_ERROR;
         }
 
