@@ -6,6 +6,9 @@
 #include <openssl/rand.h>
 #include "msquic.h"
 #include "teleop_generated.h"
+#include <thread>
+
+#define QUIC_STATUS_ACCESS_DENIED 0x8041000E
 
 class QuicProxy {
 private:
@@ -38,6 +41,22 @@ private:
         QUIC_CONNECTION_EVENT* Event) {
         auto proxy = static_cast<QuicProxy*>(Context);
         return proxy->HandleServerEvent(Connection, Event);
+    }
+
+    static QUIC_STATUS QUIC_API ListenerCallback(
+        HQUIC Listener,
+        void* Context,
+        QUIC_LISTENER_EVENT* Event) {
+        auto proxy = static_cast<QuicProxy*>(Context);
+        return proxy->HandleListenerEvent(Listener, Event);
+    }
+
+    static QUIC_STATUS QUIC_API StreamCallback(
+        HQUIC Stream,
+        void* Context,
+        QUIC_STREAM_EVENT* Event) {
+        auto proxy = static_cast<QuicProxy*>(Context);
+        return proxy->HandleStreamEvent(Stream, Event);
     }
 
     QUIC_STATUS HandleClientEvent(HQUIC Connection, QUIC_CONNECTION_EVENT* Event) {
@@ -76,54 +95,104 @@ private:
         }
     }
 
+    QUIC_STATUS HandleListenerEvent(HQUIC Listener, QUIC_LISTENER_EVENT* Event) {
+        switch (Event->Type) {
+            case QUIC_LISTENER_EVENT_NEW_CONNECTION:
+                return HandleNewConnection(Listener, Event->NEW_CONNECTION.Connection);
+            default:
+                return QUIC_STATUS_SUCCESS;
+        }
+    }
+
+    QUIC_STATUS HandleNewConnection(HQUIC Listener, HQUIC Connection) {
+        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Connection, (QUIC_CONNECTION_CALLBACK_HANDLER)ClientCallback, this))) {
+            return QUIC_STATUS_INTERNAL_ERROR;
+        }
+        return QUIC_STATUS_SUCCESS;
+    }
+
+    QUIC_STATUS HandleStreamEvent(HQUIC Stream, QUIC_STREAM_EVENT* Event) {
+        switch (Event->Type) {
+            case QUIC_STREAM_EVENT_RECEIVE:
+                // Process received data
+                if (Event->RECEIVE.BufferCount > 0) {
+                    const QUIC_BUFFER* buffer = &Event->RECEIVE.Buffers[0];
+                    
+                    // Verify the packet type and handle accordingly
+                    auto packet_type = flatbuffers::GetRoot<Teleop::ControlCommand>(buffer->Buffer);
+                    if (packet_type) {
+                        return HandleControlCommand(packet_type, Stream);
+                    }
+
+                    auto auth_request = flatbuffers::GetRoot<Teleop::AuthRequest>(buffer->Buffer);
+                    if (auth_request) {
+                        return HandleAuthRequest(auth_request, Stream);
+                    }
+
+                    auto sensor_data = flatbuffers::GetRoot<Teleop::SensorData>(buffer->Buffer);
+                    if (sensor_data) {
+                        return ForwardSensorData(sensor_data, Stream);
+                    }
+                }
+                break;
+
+            case QUIC_STREAM_EVENT_SEND_COMPLETE:
+                // Handle send completion
+                break;
+
+            case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
+                // Handle peer shutdown
+                break;
+
+            case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
+                // Handle stream shutdown
+                break;
+        }
+
+        return QUIC_STATUS_SUCCESS;
+    }
+
     QUIC_STATUS HandleClientStream(HQUIC Connection, HQUIC Stream) {
-        // Read the incoming data
-        uint8_t buffer[4096];
-        QUIC_BUFFER quicBuffer;
-        quicBuffer.Buffer = buffer;
-        quicBuffer.Length = sizeof(buffer);
-        uint32_t bytesRead = 0;
-        
-        if (QUIC_FAILED(MsQuic->StreamReceiveComplete(Stream, &quicBuffer, &bytesRead, false))) {
-            std::cerr << "Failed to receive stream data" << std::endl;
+        // Set the stream callback handler
+        QUIC_STREAM_CALLBACK_HANDLER handler = StreamCallback;
+        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Stream, handler, this))) {
+            std::cerr << "Failed to set stream callback" << std::endl;
             return QUIC_STATUS_INTERNAL_ERROR;
         }
 
-        if (bytesRead == 0) {
-            std::cerr << "Received empty stream data" << std::endl;
-            return QUIC_STATUS_INVALID_PARAMETER;
+        // Start the stream
+        if (QUIC_FAILED(MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
+            std::cerr << "Failed to start stream" << std::endl;
+            return QUIC_STATUS_INTERNAL_ERROR;
         }
 
-        // Verify the packet type and handle accordingly
-        auto packet_type = flatbuffers::GetRoot<Teleop::ControlCommand>(buffer);
-        if (packet_type) {
-            return HandleControlCommand(packet_type, Stream);
+        // Enable receiving data
+        if (QUIC_FAILED(MsQuic->StreamReceiveSetEnabled(Stream, TRUE))) {
+            std::cerr << "Failed to enable stream receive" << std::endl;
+            return QUIC_STATUS_INTERNAL_ERROR;
         }
 
-        auto auth_request = flatbuffers::GetRoot<Teleop::AuthRequest>(buffer);
-        if (auth_request) {
-            return HandleAuthRequest(auth_request, Stream);
-        }
-
-        return QUIC_STATUS_INVALID_PARAMETER;
+        return QUIC_STATUS_SUCCESS;
     }
 
     QUIC_STATUS HandleServerStream(HQUIC Connection, HQUIC Stream) {
-        // Similar to HandleClientStream but for server responses
-        uint8_t buffer[4096];
-        uint32_t bufferLength = sizeof(buffer);
-        uint32_t bytesRead = 0;
-        
-        if (QUIC_FAILED(MsQuic->StreamReceive(Stream, &buffer[0], bufferLength, &bytesRead, false))) {
+        // Set the stream callback handler
+        QUIC_STREAM_CALLBACK_HANDLER handler = StreamCallback;
+        if (QUIC_FAILED(MsQuic->SetCallbackHandler(Stream, handler, this))) {
             return QUIC_STATUS_INTERNAL_ERROR;
         }
 
-        auto sensor_data = flatbuffers::GetRoot<Teleop::SensorData>(buffer);
-        if (sensor_data) {
-            return ForwardSensorData(sensor_data, Stream);
+        // Start the stream
+        if (QUIC_FAILED(MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
+            return QUIC_STATUS_INTERNAL_ERROR;
         }
 
-        return QUIC_STATUS_INVALID_PARAMETER;
+        // Enable receiving data
+        if (QUIC_FAILED(MsQuic->StreamReceiveSetEnabled(Stream, TRUE))) {
+            return QUIC_STATUS_INTERNAL_ERROR;
+        }
+
+        return QUIC_STATUS_SUCCESS;
     }
 
     QUIC_STATUS HandleControlCommand(const Teleop::ControlCommand* command, HQUIC Stream) {
@@ -165,8 +234,10 @@ private:
         builder.Finish(response);
 
         // Send the response
-        if (QUIC_FAILED(MsQuic->StreamSend(Stream, builder.GetBufferPointer(), 
-                                          builder.GetSize(), QUIC_SEND_FLAG_FIN, nullptr))) {
+        QUIC_BUFFER sendBuffer;
+        sendBuffer.Buffer = builder.GetBufferPointer();
+        sendBuffer.Length = builder.GetSize();
+        if (QUIC_FAILED(MsQuic->StreamSend(Stream, &sendBuffer, 1, QUIC_SEND_FLAG_FIN, nullptr))) {
             return QUIC_STATUS_INTERNAL_ERROR;
         }
 
@@ -186,6 +257,48 @@ private:
             token += hex;
         }
         return token;
+    }
+
+    QUIC_STATUS ForwardSensorData(const Teleop::SensorData* sensor_data, HQUIC Stream) {
+        // Forward sensor data to the client
+        flatbuffers::FlatBufferBuilder builder;
+        
+        // Create Vector2D
+        auto position = Teleop::CreateVector2D(
+            builder,
+            sensor_data->position()->x(),
+            sensor_data->position()->y()
+        );
+        
+        // Create Quaternion
+        auto orientation = Teleop::CreateQuaternion(
+            builder,
+            sensor_data->orientation()->x(),
+            sensor_data->orientation()->y(),
+            sensor_data->orientation()->z(),
+            sensor_data->orientation()->w()
+        );
+        
+        auto data = Teleop::CreateSensorData(
+            builder,
+            sensor_data->sensor_type(),
+            position,
+            orientation,
+            sensor_data->battery_level(),
+            sensor_data->temperature(),
+            sensor_data->error_code(),
+            builder.CreateString(sensor_data->error_message()->str()),
+            sensor_data->timestamp(),
+            sensor_data->sequence_number(),
+            builder.CreateString(sensor_data->robot_id()->str())
+        );
+        builder.Finish(data);
+
+        QUIC_BUFFER buffer;
+        buffer.Buffer = builder.GetBufferPointer();
+        buffer.Length = builder.GetSize();
+
+        return MsQuic->StreamSend(Stream, &buffer, 1, QUIC_SEND_FLAG_FIN, nullptr);
     }
 
 public:
@@ -262,7 +375,7 @@ public:
         }
 
         // Start listening for client connections
-        if (QUIC_FAILED(MsQuic->ListenerOpen(Registration, ClientCallback, this, &ClientConnection))) {
+        if (QUIC_FAILED(MsQuic->ListenerOpen(Registration, ListenerCallback, this, &ClientConnection))) {
             std::cerr << "Failed to open client listener" << std::endl;
             MsQuic->ConfigurationClose(ClientConfig);
             MsQuic->ConfigurationClose(ServerConfig);
