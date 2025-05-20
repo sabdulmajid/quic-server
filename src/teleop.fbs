@@ -1,0 +1,71 @@
+namespace Teleop;
+
+enum CommandType : byte {
+    MOVE = 0,
+    STOP = 1,
+    EMERGENCY_STOP = 2,
+    CONFIGURE = 3
+}
+
+enum SensorType : byte {
+    POSITION = 0,
+    BATTERY = 1,
+    TEMPERATURE = 2,
+    ERROR = 3
+}
+
+table Vector2D {
+    x: float;
+    y: float;
+}
+
+table Quaternion {
+    x: float;
+    y: float;
+    z: float;
+    w: float;
+}
+
+table ControlCommand {
+    command_type: CommandType;
+    linear_velocity: float;
+    angular_velocity: float;
+    target_position: Vector2D;
+    timestamp: ulong;
+    sequence_number: uint;
+    client_id: string;
+    auth_token: string;
+}
+
+table SensorData {
+    sensor_type: SensorType;
+    position: Vector2D;
+    orientation: Quaternion;
+    battery_level: float;
+    temperature: float;
+    error_code: int;
+    error_message: string;
+    timestamp: ulong;
+    sequence_number: uint;
+    robot_id: string;
+}
+
+table AuthRequest {
+    client_id: string;
+    robot_id: string;
+    public_key: string;
+    timestamp: ulong;
+    nonce: string;
+}
+
+table AuthResponse {
+    success: bool;
+    auth_token: string;
+    expires_at: ulong;
+    error_message: string;
+}
+
+root_type ControlCommand;
+root_type SensorData;
+root_type AuthRequest;
+root_type AuthResponse; 
