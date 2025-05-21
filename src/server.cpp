@@ -4,6 +4,7 @@
 #include <chrono>
 #include "msquic.h"
 #include "teleop_generated.h"
+#include "features.h"
 
 // Modern msquic API expects const QUIC_API_TABLE*
 class QuicServer {
@@ -12,6 +13,11 @@ private:
     HQUIC Registration;
     HQUIC Listener;
     bool Running;
+
+    // New feature helpers
+    CommandLogger CommandLog;
+    MacroRecorder Recorder;
+    LatencyStats Latency;
 
     // Listener callback function
     static QUIC_STATUS QUIC_API ListenerCallback(
@@ -86,6 +92,9 @@ private:
 public:
     QuicServer() : MsQuic(nullptr), Registration(nullptr), Listener(nullptr), Running(false) {}
 
+    void Stop() { Running = false; }
+    MacroRecorder& GetRecorder() { return Recorder; }
+
     bool Initialize() {
         if (QUIC_FAILED(MsQuicOpen2(&MsQuic))) {
             std::cerr << "Failed to open MsQuic" << std::endl;
@@ -126,6 +135,10 @@ public:
             return false;
         }
         
+        if (!CommandLog.open("command_log.csv")) {
+            std::cerr << "Failed to open command_log.csv" << std::endl;
+        }
+
         Running = true;
         std::cout << "Server started on port 4433" << std::endl;
         return true;
@@ -227,9 +240,28 @@ public:
     }
 
     void Run() {
+        // Demo loop generates a dummy command every second
         while (Running) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            Teleop::ControlCommandT cmd;
+            cmd.linear_velocity = 0.5f;
+            cmd.angular_velocity = 0.0f;
+            cmd.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            ProcessControlCommand(cmd);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+    }
+
+    void ProcessControlCommand(const Teleop::ControlCommandT& cmd) {
+        CommandLog.log(cmd);
+        Recorder.record(cmd);
+        Latency.add(cmd.timestamp);
+
+        if (Recorder.isRecording()) {
+            std::cout << "Recording command (macro size: " << Recorder.get().size() << ")" << std::endl;
+        }
+        std::cout << "Avg latency: " << Latency.average() << " ms" << std::endl;
     }
 
     ~QuicServer() {
@@ -242,6 +274,7 @@ public:
         if (MsQuic) {
             MsQuicClose(MsQuic);
         }
+        std::cout << "Recorded macro length: " << Recorder.get().size() << std::endl;
     }
 };
 
@@ -253,6 +286,12 @@ int main() {
     if (!server.Start()) {
         return 1;
     }
-    server.Run();
+    // Example usage of macro recording feature
+    server.GetRecorder().start();
+    std::thread runThread([&server]() { server.Run(); });
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    server.GetRecorder().stop();
+    server.Stop();
+    runThread.join();
     return 0;
-} 
+}

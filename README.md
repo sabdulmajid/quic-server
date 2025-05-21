@@ -108,4 +108,20 @@ make
 - [ ] Kubernetes deployment
 - [ ] WebRTC fallback
 - [ ] Advanced security features
-- [ ] Performance monitoring dashboard 
+- [ ] Performance monitoring dashboard
+
+## Super Cool Features
+
+1. **Command Logging** - The server logs every incoming command to `command_log.csv` for later analysis.
+2. **Macro Recorder** - Record a sequence of commands and replay them to automate complex maneuvers.
+3. **Latency Monitor** - The server calculates average latency from each command's timestamp.
+
+### Demo
+
+Start the server normally. It will run a short demo that records commands for 5 seconds and prints the running latency:
+
+```bash
+./quic_server
+```
+
+Check `command_log.csv` for the logged commands and see the console output for average latency. The recorded macro length is printed on shutdown.
